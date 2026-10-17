@@ -1,0 +1,18 @@
+[general]
+name=vectorAlign
+qgisMinimumVersion=3.0
+qgisMaximumVersion=4.99
+description=Advanced spatial adjustment tool with displacement links, snapping, live preview, and attribute transfer. Fully compatible with QGIS 4 and Qt6.
+version=2.0.0
+author=Abhishek Bhalare
+email=abhishekbhalare@gmail.com
+about=vectorAlign lets you align, shift, scale, rotate and rubber-sheet vector layers using displacement (control) links. It supports Similarity, Affine, Projective, Thin-Plate-Spline and Polynomial transformations, Smart Align auto-fit, safe export, and feature-to-feature attribute transfer.
+tracker=https://github.com/yourusername/vectoralign/issues
+repository=https://github.com/yourusername/vectoralign
+homepage=https://github.com/yourusername/vectoralign
+category=Vector
+icon=icon.png
+experimental=False
+deprecated=False
+tags=vector,spatial,adjustment,affine,rubbersheet,georeferencing,transform,displacement,qt6,qgis4
+hasProcessingProvider=no
