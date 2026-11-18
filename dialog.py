@@ -69,13 +69,11 @@ class HelpDialog(QDialog):
         else: 
             self.setWindowTitle("Help - Attribute Transfer")
             
-        # Tightly constrain width so text wraps, and let Qt auto-calculate the perfect height
         self.setFixedWidth(550)
         self._setup_ui()
         
     def _setup_ui(self):
         layout = QVBoxLayout()
-        # Push all contents to the very top to eliminate any floating center gaps
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         help_text = QLabel()
@@ -127,7 +125,6 @@ class HelpDialog(QDialog):
         close_btn.setFixedWidth(120)
         close_btn.clicked.connect(self.accept)
         
-        # Center the close button nicely at the bottom
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         btn_layout.addWidget(close_btn)
@@ -276,7 +273,7 @@ class FieldMappingDialog(QDialog):
         layout.setSpacing(8)
         src_name = self._source_layer.name() if self._source_layer else '—'
         ref_name = self._ref_layer.name()    if self._ref_layer    else '—'
-        info = QLabel(f"<b>From Layer (Source):</b> {src_name}<br><b>To Layer (Target):</b> {ref_name}<br><small style='color:#555;'>Select which 'From Field' values should be copied into your 'To Fields'.</small>")
+        info = QLabel(f"<b>From Layer (Source):</b> {src_name}<br><b>To Layer (Target):</b> {ref_name}<br><small style='color:#555;'>Choose which 'From Field' values should be copied into your 'To Fields'.</small>")
         info.setTextFormat(Qt.TextFormat.RichText)
         info.setWordWrap(True)
         info.setStyleSheet("background:#f0f7f8; border:1px solid #b0d4d8; border-radius:4px; padding:7px 10px;")
@@ -986,17 +983,56 @@ class VectorAlignToolbar(QDockWidget):
 
     def toggle_link_creation(self, checked):
         if checked:
+            # --- NEW CRS MISMATCH POPUP LOGIC ---
+            canvas_crs = QgsProject.instance().crs()
+            layers = self.get_target_layers()
+            mismatched_layers = []
+            
+            for layer in layers:
+                if layer and layer.isValid():
+                    if layer.crs() != canvas_crs:
+                        mismatched_layers.append(layer.name())
+                        
+            if mismatched_layers:
+                reply = QMessageBox.warning(
+                    self,
+                    "CRS Mismatch Detected",
+                    f"<b>The Project Map CRS ({canvas_crs.authid()}) does not match the native CRS of the following layer:</b><br>"
+                    f"<ul><li>{('</li><li>'.join(mismatched_layers))}</li></ul><br><br>"
+                    "Capturing links while coordinate systems are mismatched will cause severe mathematical distortion.<br><br>"
+                    "<i><b>Action:</b> Change the Project CRS to match the layer CRS or reproject the layer. </i><br><br>"
+                    "Do you want to continue capturing links anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.No:
+                    # Abort and uncheck the Capture Links buttons
+                    self.add_link_btn.blockSignals(True)
+                    self.add_link_btn.setChecked(False)
+                    self.add_link_btn.blockSignals(False)
+                    
+                    if hasattr(self, 'at_add_link_btn'):
+                        self.at_add_link_btn.blockSignals(True)
+                        self.at_add_link_btn.setChecked(False)
+                        self.at_add_link_btn.blockSignals(False)
+                    return
+            # ------------------------------------
+
             self.clear_preview()
             if self.select_link_btn.isChecked(): self.select_link_btn.setChecked(False)
             self.map_tool = MapToolCaptureLink(self.canvas)
             self.map_tool.linkCaptured.connect(self.add_link)
             self.canvas.setMapTool(self.map_tool)
         else:
-            if self.map_tool:
+            if getattr(self, 'map_tool', None):
                 self.canvas.unsetMapTool(self.map_tool)
                 self.map_tool = None
+                
         if hasattr(self, 'at_add_link_btn'):
-            self.at_add_link_btn.blockSignals(True); self.at_add_link_btn.setChecked(checked); self.at_add_link_btn.blockSignals(False)
+            self.at_add_link_btn.blockSignals(True)
+            self.at_add_link_btn.setChecked(checked)
+            self.at_add_link_btn.blockSignals(False)
 
     def toggle_link_selection(self, checked):
         if checked:

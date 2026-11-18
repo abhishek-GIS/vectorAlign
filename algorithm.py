@@ -3,6 +3,7 @@
 algorithm.py — vectorAlign
 
 Pure computation layer. Contains NO QDockWidget / dialog UI code.
+Includes Zero-Origin Shift normalization to prevent floating-point precision loss.
 """
 
 import numpy as np
@@ -30,29 +31,60 @@ class TransformationEngine:
     @staticmethod
     def compute_polynomial_transform(source_pts, target_pts, order):
         n = len(source_pts)
+        
+        src_raw = np.array([[pt.x(), pt.y()] for pt in source_pts])
+        tgt_raw = np.array([[pt.x(), pt.y()] for pt in target_pts])
+        
+        src_centroid = np.mean(src_raw, axis=0)
+        tgt_centroid = np.mean(tgt_raw, axis=0)
+        
+        src_norm = src_raw - src_centroid
+        tgt_norm = tgt_raw - tgt_centroid
+        
         A, b_x, b_y = [], [], []
         for i in range(n):
-            x, y = source_pts[i].x(), source_pts[i].y()
-            tx, ty = target_pts[i].x(), target_pts[i].y()
+            x, y = src_norm[i, 0], src_norm[i, 1]
+            tx, ty = tgt_norm[i, 0], tgt_norm[i, 1]
+            
             row = [1, x, y, x*y, x**2, y**2]
             if order == 3:
                 row.extend([x**2*y, x*y**2, x**3, y**3])
+            
             A.append(row)
             b_x.append(tx)
             b_y.append(ty)
+            
         A, b_x, b_y = np.array(A), np.array(b_x), np.array(b_y)
         cx, _, _, _ = np.linalg.lstsq(A, b_x, rcond=None)
         cy, _, _, _ = np.linalg.lstsq(A, b_y, rcond=None)
-        return {'type': f'poly{order}', 'coeffs_x': cx, 'coeffs_y': cy, 'order': order}
+        
+        return {
+            'type': f'poly{order}', 
+            'coeffs_x': cx, 
+            'coeffs_y': cy, 
+            'order': order,
+            'src_centroid': src_centroid,
+            'tgt_centroid': tgt_centroid
+        }
 
     @staticmethod
     def apply_polynomial_transform(point, params):
-        x, y = point.x(), point.y()
+        pt_raw = np.array([point.x(), point.y()])
+        pt = pt_raw - params.get('src_centroid', np.array([0.0, 0.0]))
+        x, y = pt[0], pt[1]
+        
         terms = [1, x, y, x*y, x**2, y**2]
         if params['order'] == 3:
             terms.extend([x**2*y, x*y**2, x**3, y**3])
         
-        new_pt = QgsPoint(float(np.dot(terms, params['coeffs_x'])), float(np.dot(terms, params['coeffs_y'])))
+        t_x = float(np.dot(terms, params['coeffs_x']))
+        t_y = float(np.dot(terms, params['coeffs_y']))
+        
+        tgt_centroid = params.get('tgt_centroid', np.array([0.0, 0.0]))
+        final_x = t_x + tgt_centroid[0]
+        final_y = t_y + tgt_centroid[1]
+        
+        new_pt = QgsPoint(final_x, final_y)
         
         if params.get('preserve_z', False) and hasattr(point, 'is3D') and point.is3D():
             new_pt.addZValue(point.z())
@@ -99,18 +131,44 @@ class TransformationEngine:
     @staticmethod
     def compute_affine_transform(source_pts, target_pts):
         n = len(source_pts)
+        
+        src_raw = np.array([[pt.x(), pt.y()] for pt in source_pts])
+        tgt_raw = np.array([[pt.x(), pt.y()] for pt in target_pts])
+        
+        src_centroid = np.mean(src_raw, axis=0)
+        tgt_centroid = np.mean(tgt_raw, axis=0)
+        
+        src_norm = src_raw - src_centroid
+        tgt_norm = tgt_raw - tgt_centroid
+        
         A, b = [], []
         for i in range(n):
-            x, y, tx, ty = source_pts[i].x(), source_pts[i].y(), target_pts[i].x(), target_pts[i].y()
+            x, y = src_norm[i, 0], src_norm[i, 1]
+            tx, ty = tgt_norm[i, 0], tgt_norm[i, 1]
             A.extend([[x, y, 1, 0, 0, 0], [0, 0, 0, x, y, 1]])
             b.extend([tx, ty])
+            
         p, _, _, _ = np.linalg.lstsq(np.array(A), np.array(b), rcond=None)
-        return {'type': 'affine', 'matrix': np.array([[p[0], p[1]], [p[3], p[4]]]), 'translation': np.array([p[2], p[5]])}
+        matrix = np.array([[p[0], p[1]], [p[3], p[4]]])
+        translation = np.array([p[2], p[5]])
+        
+        return {
+            'type': 'affine', 
+            'matrix': matrix, 
+            'translation': translation,
+            'src_centroid': src_centroid,
+            'tgt_centroid': tgt_centroid
+        }
 
     @staticmethod
     def apply_affine_transform(point, params):
-        t = params['matrix'] @ np.array([point.x(), point.y()]) + params['translation']
-        new_pt = QgsPoint(float(t[0]), float(t[1]))
+        pt_raw = np.array([point.x(), point.y()])
+        pt = pt_raw - params.get('src_centroid', np.array([0.0, 0.0]))
+        
+        t = params['matrix'] @ pt + params['translation']
+        t_final = t + params.get('tgt_centroid', np.array([0.0, 0.0]))
+        
+        new_pt = QgsPoint(float(t_final[0]), float(t_final[1]))
         
         if params.get('preserve_z', False) and hasattr(point, 'is3D') and point.is3D():
             new_pt.addZValue(point.z())
@@ -120,19 +178,45 @@ class TransformationEngine:
 
     @staticmethod
     def compute_projective_transform(source_pts, target_pts):
+        src_raw = np.array([[pt.x(), pt.y()] for pt in source_pts])
+        tgt_raw = np.array([[pt.x(), pt.y()] for pt in target_pts])
+        
+        src_centroid = np.mean(src_raw, axis=0)
+        tgt_centroid = np.mean(tgt_raw, axis=0)
+        
+        src_norm = src_raw - src_centroid
+        tgt_norm = tgt_raw - tgt_centroid
+        
         A = []
         for i in range(len(source_pts)):
-            x, y, tx, ty = source_pts[i].x(), source_pts[i].y(), target_pts[i].x(), target_pts[i].y()
+            x, y = src_norm[i, 0], src_norm[i, 1]
+            tx, ty = tgt_norm[i, 0], tgt_norm[i, 1]
             A.extend([[x, y, 1, 0, 0, 0, -tx*x, -tx*y, -tx], [0, 0, 0, x, y, 1, -ty*x, -ty*y, -ty]])
+            
         _, _, Vt = np.linalg.svd(np.array(A))
         H = Vt[-1, :].reshape(3, 3)
-        return {'type': 'projective', 'homography': H / H[2, 2]}
+        return {
+            'type': 'projective', 
+            'homography': H / H[2, 2],
+            'src_centroid': src_centroid,
+            'tgt_centroid': tgt_centroid
+        }
 
     @staticmethod
     def apply_projective_transform(point, params):
-        h = params['homography'] @ np.array([point.x(), point.y(), 1.0])
+        pt_raw = np.array([point.x(), point.y()])
+        pt = pt_raw - params.get('src_centroid', np.array([0.0, 0.0]))
+        
+        h = params['homography'] @ np.array([pt[0], pt[1], 1.0])
         if abs(h[2]) > 1e-10:
-            new_pt = QgsPoint(float(h[0]/h[2]), float(h[1]/h[2]))
+            t_x = float(h[0]/h[2])
+            t_y = float(h[1]/h[2])
+            
+            tgt_centroid = params.get('tgt_centroid', np.array([0.0, 0.0]))
+            final_x = t_x + tgt_centroid[0]
+            final_y = t_y + tgt_centroid[1]
+            
+            new_pt = QgsPoint(final_x, final_y)
             if params.get('preserve_z', False) and hasattr(point, 'is3D') and point.is3D():
                 new_pt.addZValue(point.z())
             if params.get('preserve_m', False) and hasattr(point, 'isMeasure') and point.isMeasure():
@@ -143,8 +227,12 @@ class TransformationEngine:
     @staticmethod
     def compute_tps_transform(source_pts, target_pts):
         n = len(source_pts)
-        src = np.array([[pt.x(), pt.y()] for pt in source_pts])
+        src_raw = np.array([[pt.x(), pt.y()] for pt in source_pts])
         tgt = np.array([[pt.x(), pt.y()] for pt in target_pts])
+        
+        centroid = np.mean(src_raw, axis=0)
+        src = src_raw - centroid
+        
         K = np.zeros((n, n))
         for i in range(n):
             for j in range(n):
@@ -152,15 +240,21 @@ class TransformationEngine:
                     r_sq = np.sum((src[i] - src[j])**2)
                     if r_sq > 0:
                         K[i, j] = r_sq * np.log(r_sq)
+                        
         P = np.column_stack([np.ones(n), src])
         L = np.vstack([np.column_stack([K, P]), np.column_stack([P.T, np.zeros((3, 3))])])
+        
         wx = np.linalg.lstsq(L, np.concatenate([tgt[:, 0], np.zeros(3)]), rcond=None)[0]
         wy = np.linalg.lstsq(L, np.concatenate([tgt[:, 1], np.zeros(3)]), rcond=None)[0]
-        return {'type': 'tps', 'source_points': src, 'weights_x': wx, 'weights_y': wy, 'n_control': n}
+        
+        return {'type': 'tps', 'source_points': src, 'weights_x': wx, 'weights_y': wy, 'n_control': n, 'centroid': centroid}
 
     @staticmethod
     def apply_tps_transform(point, params):
-        pt = np.array([point.x(), point.y()])
+        pt_raw = np.array([point.x(), point.y()])
+        centroid = params.get('centroid', np.array([0.0, 0.0]))
+        pt = pt_raw - centroid
+        
         src = params['source_points']
         rbf = np.array([np.sum((pt - s)**2) * np.log(np.sum((pt - s)**2)) if np.sum((pt - s)**2) > 0 else 0 for s in src])
         x = float(np.dot(np.concatenate([rbf, [1.0, pt[0], pt[1]]]), params['weights_x']))
